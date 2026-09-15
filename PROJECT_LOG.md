@@ -232,6 +232,11 @@ API 前缀：`/api`（详见 USER_GUIDE）。
 
 ---
 
+### 2026-09-15 — 云服务器 Vite 允许公网 Host，并修正容器内代理
+
+- **做了什么**：`vite.config.js` 设置 `host: 0.0.0.0`、`allowedHosts: true`；代理目标改为 `http://backend:8000`（容器网络）。
+- **原因**：公网用 IP 访问前端可能被 Host 校验拦截；容器内 `localhost:8000` 指不到后端。
+
 ### 2026-09-15 — 修复词库被 gitignore 误忽略
 
 - **做了什么**：`.gitignore` 的 `data/` 改为只忽略仓库根目录 `/data/`，并提交 `backend/app/data/daily_pool.py`。
