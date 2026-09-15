@@ -52,9 +52,37 @@ async function publish() {
 }
 
 async function remove(item) {
-  if (!confirm('删除这条公开动态？')) return
+  const asAdmin = auth.isAdmin && auth.user?.id !== item.author.id
+  if (!confirm(asAdmin ? '以管理员身份删除这条公开动态？' : '删除这条公开动态？')) return
   await api.deleteMoment(item.id, auth.token)
   items.value = items.value.filter((x) => x.id !== item.id)
+}
+
+function canManage(item) {
+  return auth.isAdmin || auth.user?.id === item.author.id
+}
+
+function canDeleteComment(c) {
+  return auth.isLoggedIn && (auth.isAdmin || c.author?.id === auth.user?.id)
+}
+
+async function removeComment(item, c) {
+  if (!confirm('确定删除这条回应？')) return
+  await api.deleteMomentComment(item.id, c.id, auth.token)
+  const list = comments.value[item.id] || []
+  const drop = new Set([c.id])
+  let grew = true
+  while (grew) {
+    grew = false
+    for (const x of list) {
+      if (x.parent_id && drop.has(x.parent_id) && !drop.has(x.id)) {
+        drop.add(x.id)
+        grew = true
+      }
+    }
+  }
+  comments.value[item.id] = list.filter((x) => !drop.has(x.id))
+  item.comment_count = Math.max(0, item.comment_count - drop.size)
 }
 
 async function toggle(item) {
@@ -138,7 +166,7 @@ function findAuthor(list, parentId) {
           {{ openId === item.id ? '收起回应' : `回应 · ${item.comment_count}` }}
         </button>
         <button
-          v-if="auth.user?.id === item.author.id"
+          v-if="canManage(item)"
           class="btn btn-ghost"
           type="button"
           @click="remove(item)"
@@ -156,7 +184,17 @@ function findAuthor(list, parentId) {
             </span>
           </div>
           <p>{{ c.content }}</p>
-          <button class="btn btn-ghost tiny" type="button" @click="startReply(item, c)">回复</button>
+          <div class="c-actions">
+            <button class="btn btn-ghost tiny" type="button" @click="startReply(item, c)">回复</button>
+            <button
+              v-if="canDeleteComment(c)"
+              class="btn btn-ghost tiny danger"
+              type="button"
+              @click="removeComment(item, c)"
+            >
+              删除
+            </button>
+          </div>
         </div>
         <form class="reply" @submit.prevent="reply(item)">
           <input
@@ -232,6 +270,14 @@ function findAuthor(list, parentId) {
 .tiny {
   padding: 0.2rem 0.45rem;
   font-size: 0.82rem;
+}
+.c-actions {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+.danger {
+  color: #a33b2b;
 }
 .reply input {
   flex: 1;

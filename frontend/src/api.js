@@ -90,6 +90,8 @@ export const api = {
   comments: (postId) => request(`/api/posts/${postId}/comments`),
   createComment: (postId, payload, token) =>
     request(`/api/posts/${postId}/comments`, { method: 'POST', body: payload, token }),
+  deleteComment: (postId, commentId, token) =>
+    request(`/api/posts/${postId}/comments/${commentId}`, { method: 'DELETE', token }),
   upload: (kind, id, files, token) => uploadForm(`/api/${kind}/${id}/files`, files, token),
   daily: () => request('/api/daily'),
   dailyHistory: (limit = 60) => request(`/api/daily/history?limit=${limit}`),
@@ -99,6 +101,8 @@ export const api = {
   momentComments: (id) => request(`/api/moments/${id}/comments`),
   createMomentComment: (id, payload, token) =>
     request(`/api/moments/${id}/comments`, { method: 'POST', body: payload, token }),
+  deleteMomentComment: (momentId, commentId, token) =>
+    request(`/api/moments/${momentId}/comments/${commentId}`, { method: 'DELETE', token }),
   books: () => request('/api/books'),
   book: (id) => request(`/api/books/${id}`),
   createBook: (payload, token) => request('/api/books', { method: 'POST', body: payload, token }),
@@ -106,6 +110,8 @@ export const api = {
   bookComments: (id) => request(`/api/books/${id}/comments`),
   createBookComment: (id, payload, token) =>
     request(`/api/books/${id}/comments`, { method: 'POST', body: payload, token }),
+  deleteBookComment: (bookId, commentId, token) =>
+    request(`/api/books/${bookId}/comments/${commentId}`, { method: 'DELETE', token }),
   unreadCount: (token) => request('/api/notifications/unread-count', { token }),
   notifications: (token) => request('/api/notifications', { token }),
   readAllNotifications: (token) =>

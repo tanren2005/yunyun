@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_user
 from app.database import get_db
-from app.models import Category, Comment, Post, User
+from app.models import Attachment, Category, Comment, Post, User
 from app.schemas import (
     CategoryOut,
     CommentCreate,
@@ -18,6 +18,25 @@ from app.services import files as file_service
 from app.services import notify as notify_service
 
 router = APIRouter(tags=["content"])
+
+
+def _can_moderate(user: User, author_id: int) -> bool:
+    return bool(user.is_admin) or user.id == author_id
+
+
+def _delete_comment_subtree(db: Session, root_id: int) -> int:
+    """删除评论及其全部回复，返回删除条数。"""
+    ids = [root_id]
+    changed = True
+    while changed:
+        changed = False
+        kids = db.query(Comment.id).filter(Comment.parent_id.in_(ids)).all()
+        for (kid,) in kids:
+            if kid not in ids:
+                ids.append(kid)
+                changed = True
+    db.query(Comment).filter(Comment.id.in_(ids)).delete(synchronize_session=False)
+    return len(ids)
 
 
 @router.get("/categories", response_model=list[CategoryOut])
@@ -140,8 +159,12 @@ def delete_post(
     post = db.get(Post, post_id)
     if not post:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="作品不存在")
-    if post.author_id != user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只能删除自己的作品")
+    if not _can_moderate(user, post.author_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权删除该作品")
+    db.query(Attachment).filter(
+        Attachment.owner_kind == "post", Attachment.owner_id == post_id
+    ).delete(synchronize_session=False)
+    db.query(Comment).filter(Comment.post_id == post_id).delete(synchronize_session=False)
     db.delete(post)
     db.commit()
     return MessageOut(message="已删除")
@@ -208,3 +231,24 @@ def create_comment(
         .one()
     )
     return comment
+
+
+@router.delete("/posts/{post_id}/comments/{comment_id}", response_model=MessageOut)
+def delete_comment(
+    post_id: int,
+    comment_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    post = db.get(Post, post_id)
+    if not post:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="作品不存在")
+    comment = db.get(Comment, comment_id)
+    if not comment or comment.post_id != post_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="评论不存在")
+    if not _can_moderate(user, comment.author_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权删除该评论")
+    removed = _delete_comment_subtree(db, comment_id)
+    post.comment_count = max(0, int(post.comment_count or 0) - removed)
+    db.commit()
+    return MessageOut(message="评论已删除")

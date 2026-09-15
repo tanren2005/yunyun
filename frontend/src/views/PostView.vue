@@ -18,7 +18,13 @@ const commentError = ref('')
 const submitting = ref(false)
 const replyTo = ref(null)
 
-const canDelete = computed(() => auth.isLoggedIn && post.value?.author?.id === auth.user?.id)
+const canDelete = computed(
+  () => auth.isLoggedIn && (auth.isAdmin || post.value?.author?.id === auth.user?.id),
+)
+
+function canDeleteComment(c) {
+  return auth.isLoggedIn && (auth.isAdmin || c.author?.id === auth.user?.id)
+}
 
 const roots = computed(() => comments.value.filter((c) => !c.parent_id))
 
@@ -100,9 +106,33 @@ async function submitComment() {
 }
 
 async function removePost() {
-  if (!confirm('确定删除这篇作品？')) return
+  if (!confirm(auth.isAdmin && post.value?.author?.id !== auth.user?.id
+    ? '以管理员身份删除这篇作品？'
+    : '确定删除这篇作品？')) return
   await api.deletePost(post.value.id, auth.token)
   router.push('/')
+}
+
+async function removeComment(c) {
+  if (!confirm('确定删除这条评论？下属回复也会一并删除。')) return
+  try {
+    await api.deleteComment(route.params.id, c.id, auth.token)
+    const drop = new Set([c.id])
+    let grew = true
+    while (grew) {
+      grew = false
+      for (const x of comments.value) {
+        if (x.parent_id && drop.has(x.parent_id) && !drop.has(x.id)) {
+          drop.add(x.id)
+          grew = true
+        }
+      }
+    }
+    comments.value = comments.value.filter((x) => !drop.has(x.id))
+    if (post.value) post.value.comment_count = Math.max(0, post.value.comment_count - drop.size)
+  } catch (e) {
+    commentError.value = e.message
+  }
 }
 
 onMounted(load)
@@ -161,7 +191,17 @@ watch(() => route.params.id, load)
             <span class="muted">{{ formatDate(c.created_at) }}</span>
           </div>
           <p>{{ c.content }}</p>
-          <button class="btn btn-ghost reply-btn" type="button" @click="startReply(c)">回复</button>
+          <div class="c-actions">
+            <button class="btn btn-ghost reply-btn" type="button" @click="startReply(c)">回复</button>
+            <button
+              v-if="canDeleteComment(c)"
+              class="btn btn-ghost reply-btn danger"
+              type="button"
+              @click="removeComment(c)"
+            >
+              删除
+            </button>
+          </div>
           <ul v-if="threadReplies(c.id).length" class="replies">
             <li v-for="r in threadReplies(c.id)" :key="r.id">
               <div class="c-head">
@@ -171,7 +211,17 @@ watch(() => route.params.id, load)
                 </span>
               </div>
               <p>{{ r.content }}</p>
-              <button class="btn btn-ghost reply-btn" type="button" @click="startReply(r)">回复</button>
+              <div class="c-actions">
+                <button class="btn btn-ghost reply-btn" type="button" @click="startReply(r)">回复</button>
+                <button
+                  v-if="canDeleteComment(r)"
+                  class="btn btn-ghost reply-btn danger"
+                  type="button"
+                  @click="removeComment(r)"
+                >
+                  删除
+                </button>
+              </div>
             </li>
           </ul>
         </li>
@@ -250,6 +300,16 @@ watch(() => route.params.id, load)
   margin-top: 0.45rem;
   padding: 0.25rem 0.55rem;
   font-size: 0.85rem;
+}
+.c-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+.c-actions .danger {
+  margin-top: 0.45rem;
+  color: #a33b2b;
 }
 .replies {
   list-style: none;

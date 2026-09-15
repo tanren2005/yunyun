@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_user
 from app.database import get_db
-from app.models import BookComment, BookShare, Moment, MomentComment, User
+from app.models import Attachment, BookComment, BookShare, Moment, MomentComment, User
 from app.schemas import (
     BookCreate,
     BookOut,
@@ -20,6 +20,38 @@ from app.services import notify as notify_service
 from app.services.daily import KIND_LABEL
 
 router = APIRouter(tags=["community"])
+
+
+def _can_moderate(user: User, author_id: int) -> bool:
+    return bool(user.is_admin) or user.id == author_id
+
+
+def _delete_moment_comment_subtree(db: Session, root_id: int) -> int:
+    ids = [root_id]
+    changed = True
+    while changed:
+        changed = False
+        kids = db.query(MomentComment.id).filter(MomentComment.parent_id.in_(ids)).all()
+        for (kid,) in kids:
+            if kid not in ids:
+                ids.append(kid)
+                changed = True
+    db.query(MomentComment).filter(MomentComment.id.in_(ids)).delete(synchronize_session=False)
+    return len(ids)
+
+
+def _delete_book_comment_subtree(db: Session, root_id: int) -> int:
+    ids = [root_id]
+    changed = True
+    while changed:
+        changed = False
+        kids = db.query(BookComment.id).filter(BookComment.parent_id.in_(ids)).all()
+        for (kid,) in kids:
+            if kid not in ids:
+                ids.append(kid)
+                changed = True
+    db.query(BookComment).filter(BookComment.id.in_(ids)).delete(synchronize_session=False)
+    return len(ids)
 
 
 def _moment_out(db: Session, moment: Moment) -> MomentOut:
@@ -109,8 +141,14 @@ def delete_moment(
     moment = db.get(Moment, moment_id)
     if not moment:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="动态不存在")
-    if moment.author_id != user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只能删除自己的动态")
+    if not _can_moderate(user, moment.author_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权删除该动态")
+    db.query(Attachment).filter(
+        Attachment.owner_kind == "moment", Attachment.owner_id == moment_id
+    ).delete(synchronize_session=False)
+    db.query(MomentComment).filter(MomentComment.moment_id == moment_id).delete(
+        synchronize_session=False
+    )
     db.delete(moment)
     db.commit()
     return MessageOut(message="已删除")
@@ -178,6 +216,27 @@ def create_moment_comment(
     )
 
 
+@router.delete("/moments/{moment_id}/comments/{comment_id}", response_model=MessageOut)
+def delete_moment_comment(
+    moment_id: int,
+    comment_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    moment = db.get(Moment, moment_id)
+    if not moment:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="动态不存在")
+    comment = db.get(MomentComment, comment_id)
+    if not comment or comment.moment_id != moment_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="评论不存在")
+    if not _can_moderate(user, comment.author_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权删除该评论")
+    removed = _delete_moment_comment_subtree(db, comment_id)
+    moment.comment_count = max(0, int(moment.comment_count or 0) - removed)
+    db.commit()
+    return MessageOut(message="评论已删除")
+
+
 @router.get("/books", response_model=list[BookOut])
 def list_books(
     skip: int = Query(0, ge=0),
@@ -230,8 +289,12 @@ def delete_book(
     book = db.get(BookShare, book_id)
     if not book:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="分享不存在")
-    if book.author_id != user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只能删除自己的分享")
+    if not _can_moderate(user, book.author_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权删除该分享")
+    db.query(Attachment).filter(
+        Attachment.owner_kind == "book", Attachment.owner_id == book_id
+    ).delete(synchronize_session=False)
+    db.query(BookComment).filter(BookComment.book_id == book_id).delete(synchronize_session=False)
     db.delete(book)
     db.commit()
     return MessageOut(message="已删除")
@@ -297,3 +360,24 @@ def create_book_comment(
         .filter(BookComment.id == comment.id)
         .one()
     )
+
+
+@router.delete("/books/{book_id}/comments/{comment_id}", response_model=MessageOut)
+def delete_book_comment(
+    book_id: int,
+    comment_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    book = db.get(BookShare, book_id)
+    if not book:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="分享不存在")
+    comment = db.get(BookComment, comment_id)
+    if not comment or comment.book_id != book_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="评论不存在")
+    if not _can_moderate(user, comment.author_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权删除该评论")
+    removed = _delete_book_comment_subtree(db, comment_id)
+    book.comment_count = max(0, int(book.comment_count or 0) - removed)
+    db.commit()
+    return MessageOut(message="评论已删除")
