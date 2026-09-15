@@ -13,4 +13,4 @@ dist/
 .idea/
 .vscode/
 backend/uploads/
-data/
+/data/
